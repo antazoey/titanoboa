@@ -24,7 +24,7 @@ class _BaseEVMContract:
         self._address = address  # this can be overridden by subclasses
         self.filename = filename
 
-    def stack_trace(self, computation: ComputationAPI):
+    def stack_trace(self, computation: ComputationAPI):  # pragma: no cover
         raise NotImplementedError
 
     def handle_error(self, computation):
@@ -37,7 +37,9 @@ class _BaseEVMContract:
 
     @property
     def address(self) -> Address:
-        assert self._address is not None
+        if self._address is None:
+            # avoid assert, in pytest it would call repr(self) which segfaults
+            raise RuntimeError("Contract address is not set")
         return self._address
 
 
@@ -59,10 +61,9 @@ class StackTrace(list):
 
 
 def _trace_for_unknown_contract(computation, env):
-    ret = StackTrace(
-        [f"<Unknown location in unknown contract {computation.msg.code_address.hex()}>"]
-    )
-    return _handle_child_trace(computation, env, ret)
+    err = f"   <Unknown contract 0x{computation.msg.code_address.hex()}>"
+    trace = StackTrace([err])
+    return _handle_child_trace(computation, env, trace)
 
 
 def _handle_child_trace(computation, env, return_trace):
@@ -102,7 +103,10 @@ class BoaError(Exception):
         frame = self.stack_trace.last_frame
         if hasattr(frame, "vm_error"):
             err = frame.vm_error
-            err.args = (frame.pretty_vm_reason, *err.args[1:])
+            if not getattr(err, "_already_pretty", False):
+                # avoid double patching when str() is called more than once
+                setattr(err, "_already_pretty", True)
+                err.args = (frame.pretty_vm_reason, *err.args[1:])
         else:
             err = frame
         return f"{err}\n\n{self.stack_trace}"

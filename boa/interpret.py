@@ -117,18 +117,42 @@ def get_module_fingerprint(
     seen = seen or {}
     fingerprints = []
     for stmt in module_t.import_stmts:
-        import_info = stmt._metadata["import_info"]
-        if id(import_info) not in seen:
-            if isinstance(import_info.typ, ModuleT):
-                fingerprint = get_module_fingerprint(import_info.typ, seen)
-            else:
-                fingerprint = hash_input(import_info.compiler_input)
-            seen[id(import_info)] = fingerprint
-        fingerprint = seen[id(import_info)]
-        fingerprints.append(fingerprint)
+        for import_info in _iter_import_infos(stmt):
+            if id(import_info) not in seen:
+                seen[id(import_info)] = _get_import_fingerprint(import_info, seen)
+            fingerprints.append(seen[id(import_info)])
     fingerprints.append(module_t._module.source_sha256sum)
 
     return sha256sum("".join(fingerprints))
+
+
+def _iter_import_infos(stmt):
+    metadata = stmt._metadata
+    if "import_infos" in metadata:
+        # Vyper 0.5+ stores one or more ImportInfo objects per import node.
+        return metadata["import_infos"]
+
+    # Vyper 0.4.x stored a single ImportInfo per import node.
+    return (metadata["import_info"],)
+
+
+def _get_import_fingerprint(import_info, seen):
+    module_t = _get_import_module(import_info)
+    if module_t is not None:
+        return get_module_fingerprint(module_t, seen)
+
+    # Interface imports (e.g. .vyi or ABI files) do not have nested module
+    # state to recurse into; fingerprint their source input directly.
+    return hash_input(import_info.compiler_input)
+
+
+def _get_import_module(import_info):
+    if isinstance(import_info.typ, ModuleT):
+        # Vyper 0.4.x stores imported modules directly as ModuleT.
+        return import_info.typ
+
+    # Vyper 0.5+ wraps imported modules in ModuleInfo.
+    return getattr(import_info.typ, "module_t", None)
 
 
 def compiler_data(
